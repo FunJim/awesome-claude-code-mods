@@ -1,5 +1,19 @@
 [
   {
+    "id": "FunJim/claude-code-add-to-chat:add-to-chat",
+    "sourceCommit": "c1797d334705dae6fe12ff427d76227bbec15ed7",
+    "claudeVersion": "2.1.302",
+    "warnings": [
+      {
+        "code": "ui-control-characters",
+        "message": "UI hook source contains control-character strings. Review any values passed to next() as rewritten props.text; the scanner does not trace whether these strings reach that call.",
+        "evidence": [{ "file": "add-to-chat/hooks/selection.ts", "line": 36 }]
+      }
+    ],
+    "reason": "The null character separates request ID and selection text in an internal selection key. That key is stored and compared to suppress repeated selection offers; it is not rendered or forwarded as rewritten props.text.",
+    "source": "https://github.com/FunJim/claude-code-add-to-chat/blob/c1797d334705dae6fe12ff427d76227bbec15ed7/add-to-chat/hooks/selection.ts#L35-L37"
+  },
+  {
     "id": "404Mayank/cachebeat:.",
     "sourceCommit": "c84ac68ec30720083f503ac0ed1bc28393e44c5d",
     "claudeVersion": "2.1.300",
