@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { install } from './install.mjs'
 
 export const REPO = 'karanb192/awesome-claude-code-mods'
 const SNAPSHOT = 'docs/mods.json'
@@ -199,6 +200,9 @@ const clip = (text, n) => {
   return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s
 }
 const verified = m => VERIFIED.has(m.validate?.status)
+const hasFootprint = m => m.footprint ? m.footprint.status === 'reported'
+  : VERIFIED.has(m.validate?.status === 'unknown' ? m.lastKnownValidate?.status : m.validate?.status)
+const footprintStatus = m => !hasFootprint(m) ? 'unavailable' : verified(m) ? 'validator-reported' : 'unverified'
 const unclassified = m => (m.reach?.labels ?? []).filter(l => l.startsWith('other: ')).map(l => l.slice(7))
 
 // Which tools a matcher covers: 'all', 'some', or 'unknown' when the scan recorded it as dynamic ("?") or
@@ -250,14 +254,15 @@ function summary(m, matched) {
     kind: m.kind,
     description: clip(m.description, 240),
     access: {
-      level: m.reach?.level,
-      level_name: m.reach?.name,
+      level: hasFootprint(m) ? m.reach?.level : null,
+      level_name: hasFootprint(m) ? m.reach?.name : 'unknown',
+      ...(!hasFootprint(m) ? { minimum_level: m.reach?.minimumLevel ?? m.reach?.level ?? 0 } : {}),
       labels: (m.reach?.labels ?? []).filter(l => !l.startsWith('other: ')),
       ...(odd.length ? { unclassified_calls: odd.slice(0, 5) } : {}),
       sees: m.sees ?? [],
       draws: m.draws ?? [],
     },
-    validation: { status: m.validate?.status, claude_version: m.validate?.claudeVersion, footprint: verified(m) ? 'validator-reported' : 'unverified' },
+    validation: { status: m.validate?.status, claude_version: m.validate?.claudeVersion, footprint: footprintStatus(m) },
     in_anthropic_directory: Boolean(m.directory),
     repo_stars: m.stars ?? null,
     source: m.url,
@@ -301,12 +306,13 @@ export function search(index, params) {
     if (p.repo && m.repo.toLowerCase() !== p.repo) return false
     if (p.inDirectory && !m.directory) return false
     if (p.verifiedOnly && !verified(m)) return false
-    if (p.maxReach !== null && m.reach.level > p.maxReach) return false
+    if (p.maxReach !== null && (m.reach?.level ?? m.reach?.minimumLevel) > p.maxReach) return false
     const labels = new Set((m.reach?.labels ?? []).filter(l => !l.startsWith('other: ')))
     const sees = p.without.some(label => SEES.includes(label)) ? sightings(m) : {}
     if (p.without.some(label => labels.has(label) || sees[label] === 'yes')) return false
+    if (p.maxReach !== null && !hasFootprint(m) && !p.includeUnverified) return 'unverified'
     if (accessFilter && !p.includeUnverified) {
-      if (!verified(m)) return 'unverified'
+      if (!verified(m) || !hasFootprint(m)) return 'unverified'
       if (callFilter && unclassified(m).length) return 'unclassified'
       if (p.without.some(label => sees[label] === 'maybe')) return 'unclear'
     }
@@ -331,8 +337,8 @@ export function search(index, params) {
   }
   const page = ranked.slice(p.cursor, p.cursor + p.limit)
   const notes = []
-  if (accessFilter) notes.push(p.includeUnverified
-    ? 'Access filters use the static footprint the validator reported. Unverified results, results with unclassified_calls, and results whose hooks might see what you excluded may do more than their labels say.'
+  if (accessFilter || p.maxReach !== null) notes.push(p.includeUnverified
+    ? 'Access filters use the static footprint the validator reported. Unavailable or unverified footprints, results with unclassified_calls, and results whose hooks might see what you excluded may do more than their labels say. A minimum_level only bounds recorded calls, not total access.'
     : 'Access filters use the static footprint the validator reported; mods the filter cannot vouch for are left out. No reported access is not proof the mod never does it at runtime.')
   if (heldTotal) {
     const parts = [held.unverified && `${held.unverified} unverified`, held.unclassified && `${held.unclassified} with calls the scan could not classify`,
@@ -352,16 +358,6 @@ export function search(index, params) {
 
 const manifestUrl = m => `https://github.com/${m.repo}/blob/${m.sourceCommit ?? m.defaultBranch ?? 'main'}/${m.path === '.' ? '' : m.path + '/'}.claude-plugin/plugin.json`
 const atCommit = (m, file, line) => `https://github.com/${m.repo}/blob/${m.sourceCommit ?? m.defaultBranch ?? 'main'}/${file.split('/').map(encodeURIComponent).join('/')}${line ? '#L' + line : ''}`
-
-// What a user would type to install, when the scan saw a marketplace that lists this mod. It names the
-// repository rather than the marketplace, because dozens of unrelated marketplaces share names like
-// claude-mods. The scan records the manifest's plugin name, not the marketplace entry's.
-function install(m) {
-  if (m.directory?.plugin) return { command: `/plugin install ${m.directory.plugin}`, from: "Anthropic's plugin directory" }
-  const root = (m.marketplaces ?? []).find(p => p.path === '.claude-plugin/marketplace.json' && VERIFIED.has(p.status))
-  if (!root) return null
-  return { command: `/plugin install ${m.name} --marketplace ${m.repo}`, from: "the repository's own marketplace", check: "Confirm the plugin name in the repository's README before installing." }
-}
 
 function detail(m) {
   const kindNote = {
@@ -387,7 +383,7 @@ function detail(m) {
     validation: {
       status: m.validate?.status,
       claude_version: m.validate?.claudeVersion,
-      footprint: verified(m) ? 'validator-reported' : 'unverified',
+      footprint: footprintStatus(m),
       errors: (m.validate?.errors ?? []).slice(0, 8).map(e => clip(e, 300)),
       ...(m.lastKnownValidate ? { last_known: { status: m.lastKnownValidate.status, claude_version: m.lastKnownValidate.claudeVersion } } : {}),
       meaning: 'The validator reads the source without running it. A pass is not a runtime test or a safety guarantee.',

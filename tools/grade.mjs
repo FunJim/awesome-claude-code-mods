@@ -25,7 +25,14 @@ const RULES = [
 
 export const LEVEL_NAMES = ['draws and remembers', 'reads', 'writes or runs', 'network']
 
-export function grade(calls) {
+export function hasFootprint(mod) {
+  if (mod.footprint) return mod.footprint.status === 'reported'
+  // Legacy failures do not say whether the validator finished reporting every module.
+  const status = mod.validate?.status === 'unknown' ? mod.lastKnownValidate?.status : mod.validate?.status
+  return ['passed', 'warnings'].includes(status)
+}
+
+export function grade(calls, complete = true) {
   let level = 0
   const labels = new Set()
   for (const call of calls) {
@@ -35,7 +42,15 @@ export function grade(calls) {
     if (rule[2]) labels.add(rule[2])
   }
   const order = l => RULES.findIndex(r => r[2] === l)
-  return { level, name: LEVEL_NAMES[level], labels: [...labels].sort((a, b) => order(a) - order(b)) }
+  return { level: complete ? level : null, name: complete ? LEVEL_NAMES[level] : 'unknown', labels: [...labels].sort((a, b) => order(a) - order(b)), ...(!complete ? { minimumLevel: level } : {}) }
+}
+
+// The level and labels of the calls the rules recognise, and the calls they do not. The stored level counts
+// an unclassified call as 1, which is neither a ceiling nor a floor, so pages state the two apart.
+export function classified(calls) {
+  const known = calls.filter(call => RULES.some(([re]) => re.test(call)))
+  const { level, name, labels } = grade(known)
+  return { level, name, labels, unclassified: calls.filter(call => !known.includes(call)) }
 }
 
 // What the mod observes, from the events it hooks.
